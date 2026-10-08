@@ -1,10 +1,10 @@
-"""Day 1: a minimal API to learn the request-response cycle."""
+"""AI-SPM-Lab API application."""
 
 from fastapi import FastAPI
 
 app = FastAPI(
     title="AI-SPM-Lab",
-    description="An AI Security Posture Management learning project.",
+    description="AI Security Posture Management for AI applications.",
     version="0.1.0",
 )
 

@@ -1,1 +1,1 @@
-"""AI-SPM-Lab learning application."""
+"""AI-SPM-Lab application package."""
