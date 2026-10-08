@@ -65,9 +65,3 @@ requirements.txt   Application dependencies
 README.md          Project overview and usage
 ```
 
-## Development
-
-Keep changes focused and include validation results in pull requests. Update the
-API documentation and project status as capabilities are implemented.
-Use synthetic data for examples and keep credentials out of commits. Evaluate
-only systems you own or have permission to test.
