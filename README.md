@@ -1,4 +1,4 @@
-# SentinelAI
+# AI-SPM-Lab
 
 A learn-by-building project in **AI Security Posture Management (AI-SPM)**.
 

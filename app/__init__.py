@@ -1,1 +1,1 @@
-"""SentinelAI learning application."""
+"""AI-SPM-Lab learning application."""

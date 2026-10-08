@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 
 app = FastAPI(
-    title="SentinelAI",
+    title="AI-SPM-Lab",
     description="An AI Security Posture Management learning project.",
     version="0.1.0",
 )
