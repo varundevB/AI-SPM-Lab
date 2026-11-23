@@ -81,22 +81,6 @@ python -m unittest discover -s tests -v
 The nine inventory tests cover input boundaries, credential-bearing URLs, collection
 limits, independent record IDs/lists, UTC timestamps, and JSON serialization.
 
-## Ten-day build
-
-The MVP build runs from **23 November to 2 December 2026**. The detailed
-[build plan and completion criteria](docs/BUILD_PLAN.md) track inventory,
-configuration rules, findings, synthetic evaluations, reports, a dashboard,
-automated checks, packaging, and final verification.
-
-Every implementation increment includes an updated README. Features remain
-marked as planned until their implementation and checks have been reviewed.
-
-### Build log
-
-| Date | Delivered | Verification |
-| --- | --- | --- |
-| 2026-11-23 | Validated asset records, synthetic example, ten-day MVP plan | 9 tests passed; example validated; existing health/schema checks passed; dependency check passed |
-
 ## Roadmap
 
 - AI asset inventory with validated records for models, endpoints, and agents.
@@ -114,7 +98,6 @@ app/
   models.py         Validated inventory records
 examples/asset.json Synthetic inventory metadata; no real credentials
 tests/              Inventory validation checks
-docs/BUILD_PLAN.md  Ten-day milestones and completion criteria
 requirements.txt   Application dependencies
 .gitignore         Local environments and secrets excluded from Git
 README.md          Project overview and usage
