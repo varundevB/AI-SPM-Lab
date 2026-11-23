@@ -1,0 +1,10 @@
+{
+  "name": "Demo support assistant",
+  "asset_type": "endpoint",
+  "owner": "Demo platform team",
+  "environment": "development",
+  "endpoint_url": "https://example.invalid/v1/chat",
+  "provider": "synthetic",
+  "model_name": "demo-model",
+  "tags": ["demo", "support"]
+}
