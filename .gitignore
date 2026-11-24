@@ -11,6 +11,11 @@ dist/
 .coverage
 htmlcov/
 
+# Local inventory and SQLite transaction files
+/data/
+*.sqlite3
+*.sqlite3-*
+
 # Local secrets and configuration
 .env
 .env.*
