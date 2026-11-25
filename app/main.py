@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from app.checks import AssetChecks, evaluate_asset
 from app.inventory import InventoryStore
 from app.models import Asset, AssetCreate
 
@@ -38,7 +39,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     application = FastAPI(
         title="AI-SPM-Lab",
         description="AI Security Posture Management for AI applications.",
-        version="0.2.0",
+        version="0.3.0",
         lifespan=lifespan,
     )
 
@@ -87,6 +88,17 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         if asset is None:
             raise HTTPException(status_code=404, detail="Asset not found")
         return asset
+
+    @application.get(
+        "/assets/{asset_id}/checks", response_model=AssetChecks, tags=["Configuration checks"],
+        responses={404: {"description": "Asset not found"}},
+    )
+    def check_asset(asset_id: UUID, inventory: Inventory) -> AssetChecks:
+        """Evaluate declared configuration without probing endpoints or saving a scan."""
+        asset = inventory.get(asset_id)
+        if asset is None:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        return evaluate_asset(asset)
 
     @application.put(
         "/assets/{asset_id}", response_model=Asset, tags=["Inventory"],

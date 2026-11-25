@@ -9,8 +9,9 @@ risks, and report actionable security findings with supporting evidence.
 
 The API supports validated inventory records for models, endpoints, and agents,
 with create, list, read, replace, and delete operations backed by SQLite.
-Records survive application restarts. Configuration scanning and findings reports
-are planned; no security scan runs yet.
+Records survive application restarts. Deterministic configuration checks return
+pass, fail, or unknown results from stored declarations. Saved scan history and
+reports are planned; checks do not probe live endpoints.
 
 ## Quick start
 
@@ -36,6 +37,7 @@ activate it with `.venv\Scripts\Activate.ps1`. The remaining commands are the sa
 | POST | `/assets` | Create an asset; returns `201` and a `Location` header |
 | GET | `/assets` | List assets; `limit` defaults to 50 (1–100), `offset` defaults to 0 |
 | GET | `/assets/{asset_id}` | Read an asset by UUID |
+| GET | `/assets/{asset_id}/checks` | Evaluate current declared configuration; results are not saved |
 | PUT | `/assets/{asset_id}` | Replace metadata, preserving UUID and creation time |
 | DELETE | `/assets/{asset_id}` | Delete an asset; returns an empty `204` response |
 
@@ -79,7 +81,8 @@ curl -i -X DELETE 'http://127.0.0.1:8000/assets/<asset-id>'
 ```
 
 `PUT` replaces all editable metadata: omitted optional fields return to their
-defaults. It does not create a missing asset. Lists are ordered by creation time
+defaults, including unknown security controls when `security` is omitted.
+It does not create a missing asset. Lists are ordered by creation time
 and then UUID. Missing records return `404`; invalid bodies, UUIDs, or pagination
 return `422`. Validation responses describe the error without echoing rejected
 input values. Database operational errors return `503` without database paths.
@@ -121,6 +124,58 @@ python -c 'from pathlib import Path; from app.models import AssetCreate; print(A
 These records describe assets. Saving them does not contact an endpoint or
 verify its security.
 
+## Configuration checks
+
+An asset can include a `security` object with owner-declared controls:
+
+```json
+{
+  "authentication_enabled": true,
+  "internet_exposed": false,
+  "permissions": ["read"]
+}
+```
+
+The flags accept JSON booleans or `null`; strings such as `"false"` and numbers
+such as `0` are rejected. Permissions accept `read`, `write`, `execute`, `admin`,
+or `*`, with at most 20 entries; duplicates are removed. `null` means unknown,
+while `[]` explicitly declares no permission grants. An omitted `security`
+object defaults to unknown controls, including when reading older saved records.
+These controls describe the inventoried asset, not authentication of this API.
+
+Create the [configured synthetic example](examples/asset-configured.json), then
+use its returned `id` in the check request:
+
+```bash
+curl -X POST http://127.0.0.1:8000/assets \
+  -H 'Content-Type: application/json' \
+  --data-binary @examples/asset-configured.json
+
+curl 'http://127.0.0.1:8000/assets/<asset-id>/checks'
+```
+
+Policy version `1` uses a conservative internal-access baseline:
+
+| Rule | Pass | Fail | Unknown |
+| --- | --- | --- | --- |
+| `AUTH-001` | Authentication declared enabled | Declared disabled (high) | Not declared |
+| `EXPOSURE-001` | Internet exposure declared false | Declared true (medium) | Not declared |
+| `TRANSPORT-001` | HTTPS URL configured | HTTP URL configured (medium) | No URL |
+| `PERMISSIONS-001` | No `admin` or `*` grants declared | Either grant present (high) | Permissions not declared |
+
+Every result includes its rule ID, status, message, and evidence. Failed checks
+also include severity and remediation. The response identifies its basis as
+`declared_configuration` and counts `passed`, `failed`, and `unknown` separately.
+The configured example yields four passes; the original example yields one
+transport pass and three unknowns. No overall security score is calculated.
+
+A pass only satisfies the documented configuration rule. HTTPS does not prove
+deployed TLS validity, and a URL does not establish authentication or network
+exposure. Public access may be intentional; an exposure failure calls for review
+against this internal-access baseline. Permission checks detect declared admin
+or wildcard grants; they do not prove least privilege. Results are computed on
+request and are not scan history, compliance certification, or live security tests.
+
 ## Architecture
 
 The running application has three main layers: API routes, validation, and
@@ -133,11 +188,13 @@ flowchart LR
     Validation --> Store["InventoryStore"]
     API -->|"Read and delete"| Store
     Store --> DB[("SQLite inventory file")]
+    API -->|"Evaluate stored asset"| Checks["Deterministic configuration rules"]
 ```
 
 See the [architecture and request-flow notes](docs/architecture.md) for storage
-boundaries, replacement logic, and error handling. The diagrams describe the
-implemented inventory; scanning, findings, and reports remain planned.
+boundaries, replacement logic, configuration evaluation, and error handling.
+The diagrams describe implemented behavior; saved scans, findings history, and
+reports remain planned.
 
 ## Validation
 
@@ -151,11 +208,12 @@ python -m unittest discover -s tests -v
 Tests cover metadata validation, CRUD responses, pagination, missing records,
 rejected-input redaction, SQL-looking text, isolated databases, and persistence
 of creates, replacements, and deletions across application restarts.
+Configuration tests cover strict flags, null versus empty permissions, legacy
+records, deterministic results, evidence, and independent unknown counts.
 
 ## Roadmap
 
-- Configuration checks for authentication, exposure, and permissions.
-- Findings with severity, evidence, and remediation guidance.
+- Persistent scans and findings history.
 - Controlled evaluation cases for prompt injection and data leakage.
 - Reporting with references to relevant OWASP and NIST guidance.
 
@@ -167,7 +225,9 @@ app/
   main.py           Application factory and inventory API routes
   models.py         Validated inventory records
   inventory.py      SQLite inventory repository
+  checks.py         Declared-configuration rules and result schemas
 examples/asset.json Synthetic inventory metadata; no real credentials
+examples/asset-configured.json Synthetic asset with declared controls
 docs/architecture.md Architecture and request-flow diagrams
 tests/              Schema, API, and persistence checks
 requirements.txt   Application dependencies

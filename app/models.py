@@ -4,10 +4,33 @@ from datetime import datetime, timezone
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, StrictBool, field_validator, model_validator
 
 ShortText = Annotated[str, Field(min_length=1, max_length=120)]
 Tag = Annotated[str, Field(min_length=1, max_length=40)]
+Permission = Literal["read", "write", "execute", "admin", "*"]
+
+
+class SecurityConfiguration(BaseModel):
+    """Owner-declared controls; a missing value is unknown, not a safe default."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    authentication_enabled: StrictBool | None = Field(
+        default=None, description="Whether access requires authentication; null if unknown."
+    )
+    internet_exposed: StrictBool | None = Field(
+        default=None, description="Whether the asset is publicly reachable; null if unknown."
+    )
+    permissions: list[Permission] | None = Field(
+        default=None, max_length=20,
+        description="Declared permission categories; null is unknown, [] means no grants."
+    )
+
+    @field_validator("permissions")
+    @classmethod
+    def unique_permissions(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else list(dict.fromkeys(value))
 
 
 class AssetCreate(BaseModel):
@@ -23,6 +46,7 @@ class AssetCreate(BaseModel):
     provider: ShortText | None = None
     model_name: ShortText | None = None
     tags: list[Tag] = Field(default_factory=list, max_length=10)
+    security: SecurityConfiguration = Field(default_factory=SecurityConfiguration)
 
     @field_validator("endpoint_url")
     @classmethod

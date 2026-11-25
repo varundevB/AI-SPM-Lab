@@ -7,6 +7,7 @@
 | `app/main.py` | Application factory, startup, HTTP routes, pagination, and error responses |
 | `app/models.py` | Validate asset metadata and represent UUIDs and UTC creation times |
 | `app/inventory.py` | Parameterized SQLite queries and record serialization |
+| `app/checks.py` | Pure configuration rules, evidence, and separate pass/fail/unknown counts |
 | SQLite file | Durable inventory records across restarts |
 
 `create_app(database_path)` allows each application instance to use a separate
@@ -78,8 +79,41 @@ A replacement never inserts a missing record. Optional fields omitted from
 successful write; version-based conflict detection is not implemented. Database
 operational failures in either flow produce `503` rather than a success response.
 
+## Configuration evaluation
+
+`GET /assets/{asset_id}/checks` reads a stored asset and evaluates four rules in
+stable order. Invalid UUIDs return `422`; missing assets return `404`. It neither
+changes the asset nor persists results, and never calls a model endpoint.
+
+```mermaid
+flowchart TD
+    Asset["Validated stored asset"] --> Rules["Evaluate each policy rule"]
+    Rules --> Known{"Required declaration available?"}
+    Known -->|"No"| Unknown["Unknown; retain missing evidence"]
+    Known -->|"Yes"| Baseline{"Satisfies declared baseline?"}
+    Baseline -->|"Yes"| Pass["Pass with declared evidence"]
+    Baseline -->|"No"| Fail["Fail with severity, evidence, remediation"]
+    Unknown --> Summary["Separate passed, failed, unknown counts"]
+    Pass --> Summary
+    Fail --> Summary
+    Summary --> Response["Return current results; no scan stored"]
+```
+
+The nested `security` object stores strict nullable authentication/exposure flags
+and nullable permission categories. Missing fields remain `null`; an empty
+permissions list is a known declaration of no grants. Old JSON records without
+`security` load with unknown controls without rewriting the stored record.
+`PUT` still performs full replacement, so omitted security fields reset to unknown.
+
+Transport uses only the declared URL scheme. Exposure is never inferred from a
+hostname, and HTTPS never implies authentication. Policy version `1` expects
+authentication, internal access, an HTTPS URL when one is declared, and no admin
+or wildcard grants. A failure denotes a mismatch with that baseline, not a
+confirmed deployed vulnerability. Only failed checks carry severity/remediation;
+unknown controls stay visible and are never counted as passes.
+
 ## Scope
 
 The inventory API is intended for local development and has no authentication
-layer. Configuration checks, scans, findings history, evaluation cases, reports,
-and a dashboard are planned components, outside the implemented flows above.
+layer. Its configuration evaluator inspects owner declarations only. Saved scans,
+findings history, evaluation cases, reports, and a dashboard remain planned.

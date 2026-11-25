@@ -1,6 +1,7 @@
 """API contracts and file persistence against isolated temporary databases."""
 
 import sqlite3
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -165,6 +166,72 @@ class InventoryAPITests(unittest.TestCase):
         schema = self.client.get("/openapi.json").json()
         self.assertEqual(set(schema["paths"]["/assets"]), {"get", "post"})
         self.assertEqual(set(schema["paths"]["/assets/{asset_id}"]), {"get", "put", "delete"})
+        self.assertEqual(set(schema["paths"]["/assets/{asset_id}/checks"]), {"get"})
+
+    def test_configuration_persists_and_checks_are_available_after_restart(self):
+        config = {"authentication_enabled": True, "internet_exposed": False, "permissions": ["read", "read"]}
+        asset = self.create(endpoint_url="https://example.invalid/v1", security=config)
+        self.assertEqual(asset["security"]["permissions"], ["read"])
+        with TestClient(create_app(self.database)) as restarted:
+            response = restarted.get(f"/assets/{asset['id']}/checks")
+            self.assertEqual(response.status_code, 200)
+            result = response.json()
+            self.assertEqual(result["asset_id"], asset["id"])
+            self.assertEqual(result["summary"], {"passed": 4, "failed": 0, "unknown": 0})
+            self.assertEqual(restarted.get(f"/assets/{asset['id']}").json(), asset)
+
+    def test_checks_keep_failures_and_unknowns_separate(self):
+        asset = self.create(security={"authentication_enabled": False})
+        response = self.client.get(f"/assets/{asset['id']}/checks")
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertEqual(result["summary"], {"passed": 0, "failed": 1, "unknown": 3})
+        failure = result["checks"][0]
+        self.assertEqual(failure["severity"], "high")
+        self.assertIs(failure["evidence"]["authentication_enabled"], False)
+        self.assertTrue(failure["remediation"])
+        self.assertEqual(self.client.get(f"/assets/{asset['id']}/checks").json(), result)
+
+    def test_replacement_rechecks_controls_and_omitting_security_resets_to_unknown(self):
+        asset = self.create(security={"authentication_enabled": True, "permissions": []})
+        path = f"/assets/{asset['id']}"
+        self.assertEqual(self.client.put(path, json=self.payload(security={"permissions": ["*"]})).status_code, 200)
+        result = self.client.get(path + "/checks").json()
+        self.assertEqual(result["summary"], {"passed": 0, "failed": 1, "unknown": 3})
+        self.assertEqual(self.client.put(path, json=self.payload()).status_code, 200)
+        self.assertEqual(self.client.get(path + "/checks").json()["summary"]["unknown"], 4)
+
+    def test_checks_validate_uuid_and_report_missing_assets(self):
+        self.assertEqual(self.client.get("/assets/invalid/checks").status_code, 422)
+        self.assertEqual(self.client.get(f"/assets/{uuid4()}/checks").status_code, 404)
+
+    def test_invalid_nested_controls_are_rejected_and_not_echoed(self):
+        for config in (
+            {"authentication_enabled": "false"}, {"internet_exposed": 0},
+            {"permissions": ["superuser"]}, {"api_key": "synthetic-secret"},
+        ):
+            with self.subTest(config=config):
+                response = self.client.post("/assets", json=self.payload(security=config))
+                self.assertEqual(response.status_code, 422)
+                self.assertNotIn("synthetic-secret", response.text)
+        self.assertEqual(self.client.get("/assets").json(), [])
+
+    def test_legacy_rows_load_without_migration_or_check_side_effects(self):
+        asset = self.create()
+        legacy = dict(asset)
+        legacy.pop("security")
+        encoded = json.dumps(legacy)
+        with sqlite3.connect(self.database) as connection:
+            connection.execute("UPDATE assets SET record = ? WHERE id = ?", (encoded, asset["id"]))
+        connection.close()
+        result = self.client.get(f"/assets/{asset['id']}/checks")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json()["summary"], {"passed": 0, "failed": 0, "unknown": 4})
+        with sqlite3.connect(self.database) as connection:
+            stored = connection.execute("SELECT record FROM assets WHERE id = ?", (asset["id"],)).fetchone()[0]
+            self.assertEqual(connection.execute("SELECT count(*) FROM assets").fetchone()[0], 1)
+        connection.close()
+        self.assertEqual(stored, encoded)
 
 
 if __name__ == "__main__":
