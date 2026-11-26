@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from app.checks import AssetChecks, evaluate_asset
 from app.inventory import InventoryStore
 from app.models import Asset, AssetCreate
+from app.scans import Finding, Scan, ScanRequest, ScanSummary
 
 
 def get_inventory(request: Request) -> InventoryStore:
@@ -39,7 +40,7 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
     application = FastAPI(
         title="AI-SPM-Lab",
         description="AI Security Posture Management for AI applications.",
-        version="0.3.0",
+        version="0.4.0",
         lifespan=lifespan,
     )
 
@@ -119,6 +120,51 @@ def create_app(database_path: str | Path | None = None) -> FastAPI:
         if not inventory.delete(asset_id):
             raise HTTPException(status_code=404, detail="Asset not found")
         return Response(status_code=204)
+
+    @application.post(
+        "/assets/{asset_id}/scans", response_model=Scan, status_code=201, tags=["Scans"],
+        responses={404: {"description": "Asset not found"}},
+    )
+    def create_scan(
+        asset_id: UUID, response: Response, inventory: Inventory,
+        payload: ScanRequest | None = None,
+    ) -> Scan:
+        """Save a configuration snapshot, all check results, and failed-check findings."""
+        scan = inventory.create_scan(asset_id)
+        if scan is None:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        response.headers["Location"] = f"/scans/{scan.id}"
+        return scan
+
+    @application.get("/scans", response_model=list[ScanSummary], tags=["Scans"])
+    def list_scans(
+        inventory: Inventory,
+        asset_id: UUID | None = None,
+        limit: Annotated[int, Query(ge=1, le=100)] = 50,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> list[ScanSummary]:
+        """List saved observations newest first, optionally filtered by asset UUID."""
+        return inventory.list_scans(asset_id=asset_id, limit=limit, offset=offset)
+
+    @application.get(
+        "/scans/{scan_id}", response_model=Scan, tags=["Scans"],
+        responses={404: {"description": "Scan not found"}},
+    )
+    def read_scan(scan_id: UUID, inventory: Inventory) -> Scan:
+        scan = inventory.get_scan(scan_id)
+        if scan is None:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        return scan
+
+    @application.get(
+        "/scans/{scan_id}/findings", response_model=list[Finding], tags=["Scans"],
+        responses={404: {"description": "Scan not found"}},
+    )
+    def read_findings(scan_id: UUID, inventory: Inventory) -> list[Finding]:
+        scan = inventory.get_scan(scan_id)
+        if scan is None:
+            raise HTTPException(status_code=404, detail="Scan not found")
+        return scan.findings
 
     return application
 

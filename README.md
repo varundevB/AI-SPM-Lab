@@ -10,8 +10,9 @@ risks, and report actionable security findings with supporting evidence.
 The API supports validated inventory records for models, endpoints, and agents,
 with create, list, read, replace, and delete operations backed by SQLite.
 Records survive application restarts. Deterministic configuration checks return
-pass, fail, or unknown results from stored declarations. Saved scan history and
-reports are planned; checks do not probe live endpoints.
+pass, fail, or unknown results from stored declarations. Scans save an asset
+snapshot, all check results, and actionable findings in persistent history.
+Reports remain planned; checks and scans do not probe live endpoints.
 
 ## Quick start
 
@@ -40,6 +41,10 @@ activate it with `.venv\Scripts\Activate.ps1`. The remaining commands are the sa
 | GET | `/assets/{asset_id}/checks` | Evaluate current declared configuration; results are not saved |
 | PUT | `/assets/{asset_id}` | Replace metadata, preserving UUID and creation time |
 | DELETE | `/assets/{asset_id}` | Delete an asset; returns an empty `204` response |
+| POST | `/assets/{asset_id}/scans` | Save a new configuration scan; returns `201` and a `Location` header |
+| GET | `/scans` | List scan summaries newest first; optional `asset_id`, `limit`, and `offset` |
+| GET | `/scans/{scan_id}` | Read the saved asset snapshot, evaluation, and findings |
+| GET | `/scans/{scan_id}/findings` | Read failed-check findings for a saved scan |
 
 ```bash
 curl -i http://127.0.0.1:8000/health
@@ -174,7 +179,54 @@ deployed TLS validity, and a URL does not establish authentication or network
 exposure. Public access may be intentional; an exposure failure calls for review
 against this internal-access baseline. Permission checks detect declared admin
 or wildcard grants; they do not prove least privilege. Results are computed on
-request and are not scan history, compliance certification, or live security tests.
+request. Use the scan endpoints below to save an observation; neither mode
+provides compliance certification or live security tests.
+
+## Saved scans and findings
+
+Create the [exposed synthetic example](examples/asset-exposed.json) to produce
+four failed configuration checks. Replace `<asset-id>` and `<scan-id>` with the
+UUIDs returned by the corresponding create requests:
+
+```bash
+curl -X POST http://127.0.0.1:8000/assets \
+  -H 'Content-Type: application/json' \
+  --data-binary @examples/asset-exposed.json
+
+curl -i -X POST 'http://127.0.0.1:8000/assets/<asset-id>/scans'
+
+curl 'http://127.0.0.1:8000/scans?asset_id=<asset-id>&limit=20&offset=0'
+curl 'http://127.0.0.1:8000/scans/<scan-id>'
+curl 'http://127.0.0.1:8000/scans/<scan-id>/findings'
+```
+
+No body is required to create a scan; `{}` is also accepted. The server reads the
+stored asset and generates scan data itself. Supplied IDs, findings, or evaluation
+results are rejected. Every successful `POST` creates a separate observation.
+
+| Saved field | Meaning |
+| --- | --- |
+| `id`, `asset_id`, `created_at` | Scan UUID, original asset UUID, and UTC observation time |
+| `asset_snapshot` | Asset metadata and declared controls when the scan was created |
+| `evaluation` | Policy version, declaration-based evidence, all checks, and separate pass/fail/unknown counts |
+| `findings` | Failed checks only, with finding UUIDs, rule IDs, severity, evidence, and remediation |
+
+Passing and unknown checks remain in `evaluation`; they do not create findings.
+An empty findings list can therefore coexist with unknown controls. Finding IDs
+remain stable when rereading a scan; a new scan has new observation IDs, even
+when it sees the same failed rule.
+
+`GET /scans` returns summaries ordered by creation time and then UUID, both
+descending. Pagination uses the same defaults and limits as the asset list.
+Filtering by an unknown asset UUID returns an empty list. Full snapshots and
+findings are available through the scan detail endpoints.
+
+Saved results survive restarts and are read-only through the API. Editing or
+deleting an inventory asset does not change earlier scans or their findings.
+History remains accessible using the scan UUID or original asset filter after
+asset deletion. Reading history does not rerun rules; create another scan to
+observe updated declarations. Saved scans use the same declaration-based limits
+as current checks and do not track remediation status across observations.
 
 ## Architecture
 
@@ -183,18 +235,19 @@ file-backed inventory storage.
 
 ```mermaid
 flowchart LR
-    Client["Local client or interactive API docs"] --> API["FastAPI inventory routes"]
+    Client["Local client or interactive API docs"] --> API["FastAPI routes"]
     API --> Validation["Pydantic request validation"]
     Validation --> Store["InventoryStore"]
     API -->|"Read and delete"| Store
-    Store --> DB[("SQLite inventory file")]
+    Store --> DB[("SQLite assets and scans")]
     API -->|"Evaluate stored asset"| Checks["Deterministic configuration rules"]
+    Store -->|"Build saved observation"| Scan["Snapshot and findings builder"]
+    Scan --> Checks
 ```
 
 See the [architecture and request-flow notes](docs/architecture.md) for storage
 boundaries, replacement logic, configuration evaluation, and error handling.
-The diagrams describe implemented behavior; saved scans, findings history, and
-reports remain planned.
+The diagrams describe implemented behavior; reports and a dashboard remain planned.
 
 ## Validation
 
@@ -210,12 +263,15 @@ rejected-input redaction, SQL-looking text, isolated databases, and persistence
 of creates, replacements, and deletions across application restarts.
 Configuration tests cover strict flags, null versus empty permissions, legacy
 records, deterministic results, evidence, and independent unknown counts.
+Scan tests cover saved finding IDs, historical snapshots, restarts, legacy
+databases, pagination, failure rollback, and concurrent-write exclusion during
+snapshot creation.
 
 ## Roadmap
 
-- Persistent scans and findings history.
 - Controlled evaluation cases for prompt injection and data leakage.
 - Reporting with references to relevant OWASP and NIST guidance.
+- A local dashboard for inventory, scans, and findings.
 
 ## Repository structure
 
@@ -226,8 +282,10 @@ app/
   models.py         Validated inventory records
   inventory.py      SQLite inventory repository
   checks.py         Declared-configuration rules and result schemas
+  scans.py          Scan snapshots, summaries, and failed-check findings
 examples/asset.json Synthetic inventory metadata; no real credentials
 examples/asset-configured.json Synthetic asset with declared controls
+examples/asset-exposed.json Synthetic declarations that fail the configuration baseline
 docs/architecture.md Architecture and request-flow diagrams
 tests/              Schema, API, and persistence checks
 requirements.txt   Application dependencies

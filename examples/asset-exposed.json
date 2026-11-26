@@ -1,0 +1,15 @@
+{
+  "name": "Demo exposed assistant",
+  "asset_type": "endpoint",
+  "owner": "Demo platform team",
+  "environment": "development",
+  "endpoint_url": "http://example.invalid/v1/chat",
+  "provider": "synthetic",
+  "model_name": "demo-model",
+  "tags": ["demo", "exposed"],
+  "security": {
+    "authentication_enabled": false,
+    "internet_exposed": true,
+    "permissions": ["admin"]
+  }
+}

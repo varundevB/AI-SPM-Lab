@@ -1,4 +1,4 @@
-# Inventory architecture
+# Inventory and scan architecture
 
 ## Components and boundaries
 
@@ -6,13 +6,14 @@
 | --- | --- |
 | `app/main.py` | Application factory, startup, HTTP routes, pagination, and error responses |
 | `app/models.py` | Validate asset metadata and represent UUIDs and UTC creation times |
-| `app/inventory.py` | Parameterized SQLite queries and record serialization |
+| `app/inventory.py` | Parameterized SQLite queries, scan transactions, and record serialization |
 | `app/checks.py` | Pure configuration rules, evidence, and separate pass/fail/unknown counts |
-| SQLite file | Durable inventory records across restarts |
+| `app/scans.py` | Asset snapshots, observation IDs, summaries, and failed-check findings |
+| SQLite file | Durable inventory and scan records across restarts |
 
 `create_app(database_path)` allows each application instance to use a separate
 database. Without an explicit argument, it reads `AI_SPM_DB_PATH` or uses
-`data/inventory.sqlite3`. Startup creates the parent directory and inventory table.
+`data/inventory.sqlite3`. Startup creates the parent directory and missing tables/indexes.
 Importing the module alone does not create the database.
 
 Each repository operation opens a short-lived SQLite connection. Writes commit
@@ -112,8 +113,68 @@ or wildcard grants. A failure denotes a mismatch with that baseline, not a
 confirmed deployed vulnerability. Only failed checks carry severity/remediation;
 unknown controls stay visible and are never counted as passes.
 
+## Saving an observation
+
+`POST /assets/{asset_id}/scans` accepts no body or an empty JSON object. A scan is
+built from the stored asset rather than client-supplied results. It saves a deep
+copy of the asset, the policy version, all check results, their summary, and
+findings for failed checks only. Scan timestamps are generated in UTC.
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant API as FastAPI
+    participant Store as InventoryStore
+    participant Rules as Snapshot and rule evaluation
+    participant DB as SQLite file
+    Client->>API: POST /assets/{asset_id}/scans
+    API->>Store: Create saved observation
+    Store->>DB: BEGIN IMMEDIATE and read asset
+    alt Asset missing
+        DB-->>Store: No record
+        Store->>DB: End transaction without changes
+        Store-->>API: No asset
+        API-->>Client: 404 asset not found
+    else Asset exists
+        DB-->>Store: Stored metadata and declarations
+        Store->>Rules: Snapshot and evaluate
+        Rules-->>Store: All results and failed-check findings
+        Store->>DB: INSERT scan record and COMMIT
+        DB-->>Store: Saved
+        Store-->>API: Scan with observation IDs
+        API-->>Client: 201 with scan and Location header
+    end
+```
+
+The asset read and scan insertion share one transaction. `BEGIN IMMEDIATE`
+reserves the writer before the read, preventing another writer from changing
+the asset between reading its declarations and saving the observation.
+See [SQLite transaction behavior](https://www.sqlite.org/lang_transaction.html).
+Operational storage failures return `503`; failed writes roll back and do not
+return a successful scan response.
+
+The `scans` table stores scan UUID, original asset UUID, UTC timestamp, and the
+complete serialized observation. An index supports asset-scoped history ordered
+by timestamp and UUID. Existing inventory rows are preserved when these tables
+and indexes are created. Scans have no cascading dependency on inventory rows,
+so deleting an asset leaves its past observations available.
+
+## Reading history
+
+`GET /scans` returns bounded, newest-first summaries, optionally filtered by
+asset UUID. `GET /scans/{scan_id}` returns the complete stored observation;
+`GET /scans/{scan_id}/findings` returns its failed-check findings. These reads
+deserialize stored results and never invoke the current rule evaluator.
+
+Findings retain the original rule ID, severity, evidence, and remediation. Each
+has a UUID derived from its scan UUID and rule ID, so IDs stay stable within the
+saved observation and differ across scans. Unknown controls remain in the saved
+evaluation and cannot become findings or automatic passes. The API provides no
+update/delete routes for saved scans and does not track a finding's remediation
+state across observations.
+
 ## Scope
 
 The inventory API is intended for local development and has no authentication
-layer. Its configuration evaluator inspects owner declarations only. Saved scans,
-findings history, evaluation cases, reports, and a dashboard remain planned.
+layer. Configuration checks and saved scans inspect owner declarations only.
+Evaluation cases, reports, and a dashboard remain planned.
